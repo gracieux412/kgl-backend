@@ -1,11 +1,11 @@
 const express = require('express');
 const { procurementModel } = require('../models/procurement.model.js');
+const { stockModel } = require('../models/stock.model.js');
+const { verifyToken, requireRoles } = require('../middleware/auth.midleware.js');
 const router = express.Router()
 
 
 // create a procurement api
-
-
 
 /**
  * @swagger
@@ -95,10 +95,13 @@ const router = express.Router()
  *                   type: string
  *                   example: failed to create a procurement
  */
-router.post("/procurements", async (req, res) => {
+router.post("/procurements", verifyToken, requireRoles("manager"), async (req, res) => {
     try {
         const body = req.body
         const procurement = await procurementModel.create(body)
+        const key = { produceName: body.produceName, produceType: body.produceType, branch: body.branch }
+        const update = { $inc: { tonnage: body.tonnage }, $set: { sellingPrice: body.sellingPrice } }
+        await stockModel.updateOne(key, update, { upsert: true })
 
         res.status(201).json({
             message: "procurement created successfully",
@@ -141,15 +144,56 @@ router.post("/procurements", async (req, res) => {
 
 // get all procurement
 
-router.get("/procurements", async (req, res) => {
+router.get("/procurements", verifyToken, async (req, res) => {
     try {
-        const procurement = await procurementModel.find()
+        const { page = 1, limit = 10, search, startDate, endDate, produceType } = req.query;
+        const query = {};
+
+        // Role-based filtering
+        if (req.user.role === 'manager' || req.user.role === 'sale-agent') {
+            query.branch = req.user.branch;
+        } else if (req.query.branch) {
+            query.branch = req.query.branch;
+        }
+
+        // Search filter (produceName or dealerName)
+        if (search) {
+            query.$or = [
+                { produceName: { $regex: search, $options: 'i' } },
+                { dealerName: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Produce type filter
+        if (produceType) {
+            query.produceType = produceType;
+        }
+
+        // Date range filter
+        if (startDate || endDate) {
+            query.dateAndTime = {};
+            if (startDate) query.dateAndTime.$gte = new Date(startDate);
+            if (endDate) query.dateAndTime.$lte = new Date(endDate);
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const [procurements, totalItems] = await Promise.all([
+            procurementModel.find(query).sort({ dateAndTime: -1 }).skip(skip).limit(parseInt(limit)),
+            procurementModel.countDocuments(query)
+        ]);
+
         res.status(200).json({
             message: "all procurements",
-            body: procurement
-        })
+            body: procurements,
+            meta: {
+                totalItems,
+                totalPages: Math.ceil(totalItems / limit),
+                currentPage: parseInt(page),
+                limit: parseInt(limit)
+            }
+        });
     } catch (err) {
-        res.status(400).json({ message: err })
+        res.status(400).json({ message: "failed to fetch procurements" })
     }
 });
 
@@ -194,7 +238,7 @@ router.get("/procurements", async (req, res) => {
 
 //get procurements by id
 
-router.get("/procurements/:_id", async(req, res)=>{
+router.get("/procurements/:_id", verifyToken, async(req, res)=>{
     try{
         let id = req.params._id
         const procurement = await procurementModel.findById(id)
@@ -217,6 +261,83 @@ router.get("/procurements/:_id", async(req, res)=>{
         });
     }
 })
+
+/**
+ * @swagger
+ * /api/procurements/{_id}:
+ *   put:
+ *     summary: Update a procurement
+ *     description: Updates a procurement by its ID.
+ *     tags:
+ *       - Procurements
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: _id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The procurement ID
+ *         example: 65cbd123abc4567890
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               produceName:
+ *                 type: string
+ *               produceType:
+ *                 type: string
+ *               tonnage:
+ *                 type: number
+ *               cost:
+ *                 type: number
+ *               dealerName:
+ *                 type: string
+ *               contact:
+ *                 type: string
+ *               sellingPrice:
+ *                 type: number
+ *               dateAndTime:
+ *                 type: string
+ *                 format: date-time
+ *               branch:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Procurement updated successfully
+ *       404:
+ *         description: Procurement not found
+ *       500:
+ *         description: Server error
+ */
+
+router.put("/procurements/:_id", verifyToken, requireRoles("manager"), async (req, res) => {
+    try {
+        const id = req.params._id;
+        const updateData = req.body;
+        const procurement = await procurementModel.findByIdAndUpdate(id, updateData, { new: true });
+
+        if (!procurement) {
+            return res.status(404).json({
+                message: "Procurement not found"
+            });
+        }
+
+        res.status(200).json({
+            message: "Procurement updated successfully",
+            body: procurement
+        });
+    } catch (err) {
+        res.status(500).json({
+            message: "An error occurred",
+            error: err.message
+        });
+    }
+});
 
 /**
  * @swagger
@@ -247,7 +368,7 @@ router.get("/procurements/:_id", async(req, res)=>{
 
 // router for deleting procurements
 
-router.delete("/procurements/:_id", async (req, res) => {
+router.delete("/procurements/:_id", verifyToken, requireRoles("manager"), async (req, res) => {
     try {
         const id = req.params._id;
 
@@ -320,7 +441,7 @@ router.delete("/procurements/:_id", async (req, res) => {
  */
 
 
-router.patch("/procurements/:_id", async (req, res) => {
+router.patch("/procurements/:_id", verifyToken, requireRoles("manager"), async (req, res) => {
     try {
         let id = req.params._id;
         let updateUser = await procurementModel.findByIdAndUpdate(id, req.body, { new: true })

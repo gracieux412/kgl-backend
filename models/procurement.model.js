@@ -36,7 +36,7 @@ const procurementSchema = new mongoose.Schema({
     },
     branch: {
         type: String,
-        enum: ["Majango", "Matugga"],
+        enum: ["Maganjo", "Matugga"],
         required: true
     },
     contact: {
@@ -48,6 +48,11 @@ const procurementSchema = new mongoose.Schema({
         type: Number,
         required: true,
         min: 1000
+    },
+    status: {
+        type: String,
+        enum: ["pending", "approved", "rejected"],
+        default: "pending"
     }
 }, { timestamps: true 
     

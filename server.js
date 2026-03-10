@@ -3,10 +3,18 @@ const express = require('express')
 const cors = require("cors")
 const swaggerJSDoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
+const bcrypt = require("bcrypt");
+const { userModel } = require("./models/users.model");
+const { branchModel } = require("./models/branch.model");
 const { router: usersRouter } = require("./router/users.js")
 const { router: salesRouter } = require("./router/sales.js")
 const { router: procurementsRouter } = require("./router/procurements.js")
 const { router: loginRouter } = require("./router/auth.js")
+const { router: accountRouter } = require("./router/account.js")
+const { router: creditSalesRouter } = require("./router/creditSales.js")
+const { router: stockRouter } = require("./router/stock.js")
+const { router: reportsRouter } = require("./router/reports.js")
+const { router: adminRouter } = require("./router/admin.js")
 const connectDB = require("./config/db.js")
 
 
@@ -18,14 +26,20 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-//authentication route
-app.use(loginRouter)
+
 
 //authorization middleware
 
 app.use( usersRouter)
 app.use( salesRouter)
 app.use( procurementsRouter)
+app.use( creditSalesRouter)
+app.use( stockRouter)
+app.use( reportsRouter)
+
+app.use( loginRouter)
+app.use( accountRouter)
+app.use('/admin', adminRouter)
 
 
 
@@ -61,12 +75,79 @@ const startServer = async () => {
         //connect to database
         await connectDB();
 
-        // await userModel.create({
-        //     username: "admin1",
-        //     email: "admin1@test.com",
-        //     password: "password123",
-        //     role: "admin",
-        // })
+        const adminEmail = "admin@gmail.com";
+        const existingAdmin = await userModel.findOne({ email: adminEmail });
+        if (!existingAdmin) {
+            const hashed = await bcrypt.hash("admin", 10);
+            await userModel.create({
+                username: "superadmin",
+                email: adminEmail,
+                password: hashed,
+                role: "admin"
+            });
+            console.log("Default super admin created:", adminEmail);
+        }
+
+        // Create default branches
+        const defaultBranches = [
+            { name: "Maganjo", location: "Maganjo Town Center" },
+            { name: "Matugga", location: "Matugga Market Area" }
+        ];
+
+        for (const branchData of defaultBranches) {
+            const existingBranch = await branchModel.findOne({ name: branchData.name });
+            if (!existingBranch) {
+                await branchModel.create(branchData);
+                console.log(`Default branch created: ${branchData.name}`);
+            }
+        }
+
+        // Create sample users
+        const sampleUsers = [
+            {
+                username: "director1",
+                email: "director@kgl.com",
+                password: await bcrypt.hash("director123", 10),
+                role: "director"
+            },
+            {
+                username: "manager_maganjo",
+                email: "manager.maganjo@kgl.com",
+                password: await bcrypt.hash("manager123", 10),
+                role: "manager",
+                branch: "Maganjo"
+            },
+            {
+                username: "manager_matugga",
+                email: "manager.matugga@kgl.com",
+                password: await bcrypt.hash("manager123", 10),
+                role: "manager",
+                branch: "Matugga"
+            },
+            {
+                username: "agent_maganjo1",
+                email: "agent1.maganjo@kgl.com",
+                password: await bcrypt.hash("agent123", 10),
+                role: "sale-agent",
+                branch: "Maganjo"
+            },
+            {
+                username: "agent_matugga1",
+                email: "agent1.matugga@kgl.com",
+                password: await bcrypt.hash("agent123", 10),
+                role: "sale-agent",
+                branch: "Matugga"
+            }
+        ];
+
+        for (const userData of sampleUsers) {
+            const existingUser = await userModel.findOne({ email: userData.email });
+            if (!existingUser) {
+                await userModel.create(userData);
+                console.log(`Sample user created: ${userData.username}`);
+            }
+        }
+
         console.log("ENV MONGO_URI:", process.env.MONGO_URI)
 
         //listen to server port

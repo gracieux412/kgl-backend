@@ -1,5 +1,7 @@
 const express = require('express');
 const { userModel } = require('../models/users.model');
+const bcrypt = require("bcrypt");
+const { verifyToken, requireRoles } = require('../middleware/auth.midleware.js');
 const router = express.Router()
 
 
@@ -31,9 +33,14 @@ const router = express.Router()
  *       400:
  *         description: Failed to create user
  */
-router.post("/users", async (req, res) => {
+router.post("/users", verifyToken, requireRoles("admin"), async (req, res) => {
     try {
         const body = req.body
+        if (!body.password) {
+            return res.status(400).json({ message: "password is required" })
+        }
+        const hashed = await bcrypt.hash(body.password, 10);
+        body.password = hashed;
         const user = await userModel.create(body)
 
         res.status(201).json({
@@ -73,18 +80,55 @@ router.post("/users", async (req, res) => {
  *         description: Failed to fetch users
  */
 
-router.get("/users", async (req, res) => {
+router.get("/users", verifyToken, requireRoles("admin"), async (req, res) => {
     try {
-        const user = await userModel.find()
+        const { page = 1, limit = 10, search, role, branch } = req.query;
+        const query = {};
+
+        if (search) {
+            query.$or = [
+                { username: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        if (role) query.role = role;
+        if (branch) query.branch = branch;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const [users, totalItems] = await Promise.all([
+            userModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)),
+            userModel.countDocuments(query)
+        ]);
+
         res.status(200).json({
             message: "all users",
-            body: user
-        })
+            body: users,
+            meta: {
+                totalItems,
+                totalPages: Math.ceil(totalItems / limit),
+                currentPage: parseInt(page),
+                limit: parseInt(limit)
+            }
+        });
     } catch (err) {
-        res.status(400).json({ message: err })
+        res.status(400).json({ message: "failed to fetch users" })
     }
 });
 
+
+router.get("/users/me", verifyToken, async (req, res) => {
+    try {
+        const user = await userModel.findById(req.user.id).select("-password");
+        if (!user) return res.status(404).json({ message: "User not found" });
+        res.status(200).json({
+            message: "current user",
+            body: user
+        });
+    } catch (err) {
+        res.status(500).json({ message: "Server error" });
+    }
+});
 
 //get users by id
 
@@ -119,7 +163,7 @@ router.get("/users", async (req, res) => {
  *         description: Server error
  */
 
-router.get("/users/:_id", async(req, res)=>{
+router.get("/users/:_id", verifyToken, requireRoles("admin"), async(req, res)=>{
     try{
         let id = req.params._id
         const user = await userModel.findById(id)
@@ -167,7 +211,7 @@ router.get("/users/:_id", async(req, res)=>{
  *         description: Server error
  */
 
-router.delete("/users/:_id", async (req, res) => {
+router.delete("/users/:_id", verifyToken, requireRoles("admin"), async (req, res) => {
     try {
         const id = req.params._id;
 
@@ -222,10 +266,14 @@ router.delete("/users/:_id", async (req, res) => {
  *         description: Server error
  */
 
-router.patch("/users/:_id", async (req, res) => {
+router.patch("/users/:_id", verifyToken, requireRoles("admin"), async (req, res) => {
     try {
         let id = req.params._id;
-        let updateUser = await userModel.findByIdAndUpdate(id, req.body, { new: true })
+        const update = { ...req.body };
+        if (update.password) {
+            update.password = await bcrypt.hash(update.password, 10);
+        }
+        let updateUser = await userModel.findByIdAndUpdate(id, update, { new: true })
 
         if (!updateUser) {
             return res.status(404).json({

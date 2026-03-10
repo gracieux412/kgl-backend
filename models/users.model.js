@@ -22,8 +22,10 @@ const userSchema = new mongoose.Schema({
     },
     branch: {
         type:String,
-        enum: ["Majango", "Matugga"],
-        required:true
+        enum: ["Maganjo", "Matugga"],
+        required: function() {
+            return this.role !== 'director' && this.role !== 'admin';
+        }
     }
 });
 

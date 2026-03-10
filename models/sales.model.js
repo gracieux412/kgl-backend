@@ -43,7 +43,7 @@ const salesSchema = new mongoose.Schema({
 
     branch: {
         type: String,
-        enum: ["Majango", "Matugga"],
+        enum: ["Maganjo", "Matugga"],
         required: true
     },
 

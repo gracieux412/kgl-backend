@@ -1,7 +1,9 @@
 const express = require('express');
 const { salesModel } = require('../models/sales.model.js');
+const { stockModel } = require('../models/stock.model.js');
+const { procurementModel } = require('../models/procurement.model.js');
+const { verifyToken, requireRoles } = require('../middleware/auth.midleware.js');
 const router = express.Router()
-
 
 /**
  * @swagger
@@ -31,10 +33,24 @@ const router = express.Router()
  *         description: Failed to create sale
  */
 // create a sale api
-router.post("/sales", async (req, res) => {
+router.post("/sales", verifyToken, requireRoles("manager", "sale-agent"), async (req, res) => {
     try {
         const body = req.body
-        const sale = await salesModel.create(body)
+        if (body.saleType && body.saleType !== "cash") {
+            return res.status(400).json({ message: "use credit sales endpoint for credit sales" })
+        }
+        const key = { 
+            produceName: body.produceName, 
+            produceType: body.produceType, 
+            branch: body.branch 
+        }
+        const stock = await stockModel.findOne(key)
+        if (!stock || stock.tonnage < body.tonnage) {
+            return res.status(400).json({ message: "insufficient stock" })
+        }
+        const sale = await salesModel.create({ ...body, saleType: "cash" })
+        await stockModel.updateOne(key, { $inc: { tonnage: -body.tonnage } })
+        await procurementModel.updateOne(key, { $inc: { tonnage: -body.tonnage } })
 
         res.status(201).json({
             message: "sale created successfully",
@@ -46,7 +62,6 @@ router.post("/sales", async (req, res) => {
         res.status(400).json({ message: "failed to create a sale" })
     }
 })
-
 
 /**
  * @swagger
@@ -73,19 +88,55 @@ router.post("/sales", async (req, res) => {
  */
 // get all sale
 
-router.get("/sales", async (req, res) => {
+router.get("/sales", verifyToken, async (req, res) => {
     try {
-        const sale = await salesModel.find()
+        const { page = 1, limit = 10, search, startDate, endDate, produceType } = req.query;
+        const query = {};
+
+        // Role-based filtering
+        if (req.user.role === 'manager' || req.user.role === 'sale-agent') {
+            query.branch = req.user.branch;
+        } else if (req.query.branch) {
+            query.branch = req.query.branch;
+        }
+
+        // Search filter (produceName)
+        if (search) {
+            query.produceName = { $regex: search, $options: 'i' };
+        }
+
+        // Produce type filter
+        if (produceType) {
+            query.produceType = produceType;
+        }
+
+        // Date range filter
+        if (startDate || endDate) {
+            query.dateAndTime = {};
+            if (startDate) query.dateAndTime.$gte = new Date(startDate);
+            if (endDate) query.dateAndTime.$lte = new Date(endDate);
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const [sales, totalItems] = await Promise.all([
+            salesModel.find(query).sort({ dateAndTime: -1 }).skip(skip).limit(parseInt(limit)),
+            salesModel.countDocuments(query)
+        ]);
+
         res.status(200).json({
             message: "all sales",
-            body: sale
-        })
+            body: sales,
+            meta: {
+                totalItems,
+                totalPages: Math.ceil(totalItems / limit),
+                currentPage: parseInt(page),
+                limit: parseInt(limit)
+            }
+        });
     } catch (err) {
-        res.status(400).json({ message: err })
+        res.status(400).json({ message: "failed to fetch sales" })
     }
 });
-
-
 
 /**
  * @swagger
@@ -119,7 +170,7 @@ router.get("/sales", async (req, res) => {
  */
 //get sales by id
 
-router.get("/sales/:_id", async(req, res)=>{
+router.get("/sales/:_id", verifyToken, async(req, res)=>{
     try{
         let id = req.params._id
         const sale = await salesModel.findById(id)
@@ -167,7 +218,7 @@ router.get("/sales/:_id", async(req, res)=>{
  */
 // router for deleting sales
 
-router.delete("/sales/:_id", async (req, res) => {
+router.delete("/sales/:_id", verifyToken, requireRoles("manager", "sale-agent"), async (req, res) => {
     try {
         const id = req.params._id;
 
@@ -178,6 +229,15 @@ router.delete("/sales/:_id", async (req, res) => {
                 message: "sale not found"
             });
         }
+
+        // Restock
+        const key = { 
+            produceName: sale.produceName, 
+            produceType: sale.produceType, 
+            branch: sale.branch 
+        };
+        await stockModel.updateOne(key, { $inc: { tonnage: sale.tonnage } });
+        await procurementModel.updateOne(key, { $inc: { tonnage: sale.tonnage } });
 
         res.status(200).json({
             message: "sale deleted successfully",
@@ -222,7 +282,7 @@ router.delete("/sales/:_id", async (req, res) => {
  *         description: Server error
  */
 
-router.patch("/sales/:_id", async (req, res) => {
+router.patch("/sales/:_id", verifyToken, requireRoles("manager", "sale-agent"), async (req, res) => {
     try {
         let id = req.params._id;
         let updateUser = await salesModel.findByIdAndUpdate(id, req.body, { new: true })
